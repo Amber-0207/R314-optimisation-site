@@ -222,10 +222,24 @@
     }
   }
 
+  /* Affiche les images une fois chargées (fondu, cf. styles.css). */
+  function watchImages() {
+    UIKit.qsa('.card img').forEach(function (img) {
+      if (img.complete) {
+        UIKit.cls(img, 'loaded', true);
+      } else {
+        img.addEventListener('load', function () {
+          UIKit.cls(img, 'loaded', true);
+        });
+      }
+    });
+  }
+
   UIKit.ready(function () {
     buildKeywordIndex();
     buildActivityCalendar();
     jours = UIKit.qsa('.cal-day');
+    watchImages();
     revealCards();
     scheduleFade();
     var champ = UIKit.qs('#q');
