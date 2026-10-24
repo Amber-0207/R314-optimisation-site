@@ -1,7 +1,7 @@
 /* ============================================================
    app.js — interactions de la galerie SlowSite
    Révélation des vignettes au scroll + nuage de mots-clés.
-   Dépend de js/vendor/ui-kit.min.js (UIKit).
+   Plus de dépendance à ui-kit.min.js : 4 petites fonctions suffisent.
    ============================================================ */
 (function () {
   'use strict';
@@ -69,17 +69,30 @@
     'fonds photographique', 'inventaire', 'numérisation', 'conservation'
   ];
 
+  /* Remplace UIKit (ui-kit.min.js), qui faisait une boucle d'attente de
+     620 ms, créait 240 000 objets au chargement et recalculait les styles
+     de toute la page à chaque modification du DOM. */
+  var UIKit = {
+    qs: function (s) { return document.querySelector(s); },
+    qsa: function (s) { return [].slice.call(document.querySelectorAll(s)); },
+    cls: function (e, n, on) { if (e) e.classList[on ? 'add' : 'remove'](n); },
+    ready: function (f) {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', f);
+      else f();
+    }
+  };
+
   /* Alimente les suggestions du champ de filtrage avec le vocabulaire
-     d'indexation de la photothèque. */
+     d'indexation de la photothèque. On construit la chaîne une seule fois
+     au lieu de faire innerHTML += dans la boucle (coût quadratique). */
   function buildKeywordIndex() {
     var list = UIKit.qs('#motscles');
     if (!list) return;
-
-    list.innerHTML = '';
+    var html = '';
     for (var i = 0; i < TAGS.length; i++) {
-      // On ajoute chaque entrée au fur et à mesure pour garder l'ordre.
-      list.innerHTML += '<option value="' + TAGS[i] + '"></option>';
+      html += '<option value="' + TAGS[i] + '"></option>';
     }
+    list.innerHTML = html;
   }
 
   /* Construit le calendrier d'activité : 53 semaines de 7 jours, la teinte de
@@ -154,63 +167,72 @@
     }
   }
 
-  /* Aligne la hauteur des cartes et anime leur arrivée dans le viewport. */
-  function revealCards() {
+  /* Aligne la hauteur des cartes. On lit toutes les hauteurs d'abord,
+     puis on écrit : une seule mise en page au lieu d'une par carte
+     (avant, la boucle imbriquée forçait un reflow à chaque tour). */
+  function equalizeCards() {
     var cards = UIKit.qsa('.card');
-
-    for (var i = 0; i < cards.length; i++) {
-      var rect = cards[i].getBoundingClientRect();
-
-      // Hauteur de la plus grande carte, pour garder une grille régulière.
-      var tallest = 0;
-      var all = UIKit.qsa('.card');
-      for (var j = 0; j < all.length; j++) {
-        if (all[j].offsetHeight > tallest) {
-          tallest = all[j].offsetHeight;
-        }
-      }
-      cards[i].style.minHeight = tallest + 'px';
-
-      if (rect.top < window.innerHeight - 40) {
-        UIKit.cls(cards[i], 'visible', true);
-        cards[i].style.transform = 'translateY(0px)';
-      } else {
-        cards[i].style.transform = 'translateY(24px)';
-      }
+    var i, tallest = 0;
+    for (i = 0; i < cards.length; i++) cards[i].style.minHeight = '';
+    for (i = 0; i < cards.length; i++) {
+      if (cards[i].offsetHeight > tallest) tallest = cards[i].offsetHeight;
     }
-
-    // Les cases du calendrier apparaissent progressivement à l'approche.
-    var jours = UIKit.qsa('.cal-day');
-    for (var k = 0; k < jours.length; k++) {
-      var box = jours[k].getBoundingClientRect();
-      var d = Math.abs(box.top - window.innerHeight / 2);
-      jours[k].style.opacity = Math.max(0.15, 1 - d / window.innerHeight);
-    }
+    for (i = 0; i < cards.length; i++) cards[i].style.minHeight = tallest + 'px';
   }
 
-  /* Affiche les images une fois chargées. */
-  function watchImages() {
-    UIKit.qsa('.card img').forEach(function (img) {
-      if (img.complete) {
-        UIKit.cls(img, 'loaded', true);
-      } else {
-        img.addEventListener('load', function () {
-          UIKit.cls(img, 'loaded', true);
-        });
-      }
-    });
+  /* Anime l'arrivée des cartes dans le viewport, sans écouter le scroll. */
+  function revealCards() {
+    var cards = UIKit.qsa('.card');
+    if (!('IntersectionObserver' in window)) {
+      cards.forEach(function (c) { UIKit.cls(c, 'visible', true); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          UIKit.cls(e.target, 'visible', true);
+          io.unobserve(e.target);
+        }
+      });
+    }, { rootMargin: '0px 0px -40px 0px' });
+    cards.forEach(function (c) { io.observe(c); });
+  }
+
+  /* Les cases du calendrier apparaissent progressivement à l'approche.
+     Une seule lecture de position (le calendrier entier) par image, au lieu
+     d'un getBoundingClientRect par case (371) à chaque événement scroll. */
+  var jours = [];
+  var pending = false;
+  function fadeCalendar() {
+    pending = false;
+    var host = UIKit.qs('#calendrier');
+    if (!host || !jours.length) return;
+    var top = host.getBoundingClientRect().top;
+    var vh = window.innerHeight;
+    for (var k = 0; k < jours.length; k++) {
+      var rowTop = top + (k % 7) * 14; // 11px de case + 3px d'espace
+      var d = Math.abs(rowTop - vh / 2);
+      jours[k].style.opacity = Math.max(0.15, 1 - d / vh);
+    }
+  }
+  function scheduleFade() {
+    if (!pending) {
+      pending = true;
+      requestAnimationFrame(fadeCalendar);
+    }
   }
 
   UIKit.ready(function () {
     buildKeywordIndex();
     buildActivityCalendar();
-    watchImages();
+    jours = UIKit.qsa('.cal-day');
     revealCards();
+    scheduleFade();
     var champ = UIKit.qs('#q');
     if (champ) champ.addEventListener('input', filterGallery);
   });
 
-  window.addEventListener('scroll', revealCards);
-  window.addEventListener('resize', revealCards);
-  window.addEventListener('load', revealCards);
+  window.addEventListener('scroll', scheduleFade, { passive: true });
+  window.addEventListener('resize', function () { scheduleFade(); equalizeCards(); });
+  window.addEventListener('load', equalizeCards);
 })();
